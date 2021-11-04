@@ -21,12 +21,12 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "provision": "aws cloudformation deploy --template-file ./s3tack.yaml --stack-name twooderstack --parameter-overrides BucketName=twooderbucket",
-    "upload": "aws s3 cp build/ s3://twooderbucket --recursive",
+    "upload": "aws s3 cp build/ s3://twooderbucket --recursive", 
     "deploy": "npm run provision && npm run build && npm run upload",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
-  
+
   "eslintConfig": {
     "extends": [
       "react-app",

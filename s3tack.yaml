@@ -15,7 +15,7 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Ref BucketName
-      AccessControl: PublicRead # visitors need to be able to access the sie
+      AccessControl: PublicRead 
       WebsiteConfiguration: # this makes the S3 Bucket a static website/app
         IndexDocument: index.html # default object served when visiting S3 domain
         ErrorDocument: index.html # just send to app, let React handle errors and routing
