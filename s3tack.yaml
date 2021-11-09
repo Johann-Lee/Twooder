@@ -35,6 +35,76 @@ Resources:
             Action: 's3:GetObject'
             Resource: !Join ['', ['arn:aws:s3:::', !Ref MyBucket, /*]]
 
+  RestApi:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Name: twooder-api
+
+    GetUsers:
+      Type: 'AWS::ApiGateway::Method'
+      Properties:
+        RestApiId: !Ref RestApi
+        ResourceId: !GetAtt RestApi.RootResourceId
+        HttpMethod: GET
+        RequestParameters:
+          method.request.querystring.username: true
+        AuthorizationType: NONE
+        Integration:
+          IntegrationHttpMethod: GET
+          Type: AWS_PROXY
+          Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TwitterApiLambda.Arn}/invocations'
+
+    Deployment:
+      Type: 'AWS::ApiGateway::Deployment'
+      Properties:
+        RestApiId: !Ref RestApi
+        StageName: v1
+      DependsOn:
+        - GetUsers
+
+    TwitterApiLambda:
+      Type: 'AWS::Lambda::Function'
+      Properties:
+        Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+        Runtime: python3.7
+        Handler: index.lambda_handler
+        Code:
+          ZipFile: |
+            import requests
+            
+
+            def lambda_handler(event, context):
+                bearer_token = 'Bearer <BearerToken>'
+                username = event['queryStringParameters']['username']
+
+                res = requests.get("https://api.twitter.com/2/users/by?",
+                                 params={'usernames': username},
+                                 headers={'Authorization': bearer_token})
+
+                user = res.json()['data'][0]
+
+                if user is None:
+                    return {'statusCode': 400, 'body': None}
+
+                user_id = user['id']
+
+                if user_id is None:
+                    return {'statusCode': 400, 'body': None}
+
+                url = "https://api.twitter.com/2/users/" + user_id + "/tweets"
+                res = requests.get(url, headers={'Authorization': bearer_token})
+                return { 'statusCode': 200, 'body': res.json() }
+
+    LambdaApiGatewayInvoke:
+      Type: 'AWS::Lambda::Permission'
+      Properties:
+        Action: lambda:InvokeFunction
+        FunctionName: !Ref TwitterApiLambda
+        Principal: apigateway.amazonaws.com
+
 Outputs:
   WebsiteURL:
     Value: !GetAtt MyBucket.WebsiteURL
