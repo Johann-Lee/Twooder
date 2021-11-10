@@ -8,6 +8,18 @@ Parameters:
   BucketName:
     Description: Unique name for your bucket. This will be in the S3 url to your React app.
     Type: String
+  MasterUser:
+    Description: master username for rds (Must be >8 characters)
+    Type: String
+  MasterPassword:
+    Description: master password for rds (Must be >8 characters)
+    Type: String
+  DBName:
+    Description: Database Name
+    Type: String
+  BearToken:
+    Description: Bear Token
+    Type: String
 
 Resources:
   # Create an S3 Bucket that serves a static website (i.e. React app)
@@ -35,6 +47,50 @@ Resources:
             Action: 's3:GetObject'
             Resource: !Join ['', ['arn:aws:s3:::', !Ref MyBucket, /*]]
 
+  # Creates an RDS DB
+  MyRDS:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: !Ref DBName
+      Engine: postgres
+      AllocatedStorage: '5'
+      DBInstanceClass: db.m5.large
+      MasterUsername: !Ref MasterUser
+      MasterUserPassword: !Ref MasterPassword
+
+#  RDSTableLambda:
+#    Type: 'AWS::Lambda::Function'
+#    Properties:
+#      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+#      Runtime: python3.9
+#      Handler: index.handler
+#      FunctionName: 'RDS_table'
+#      Code:
+#        ZipFile: |
+#          import psycopg2
+#
+#          def lambda_handler(event, context):
+#            connection = psycopg2.connect(
+#              host = '${Rds.Endpoint.Address}',
+#              port = 5432,
+#              user = !Ref MasterUser,
+#              password = !Ref MasterPassword,
+#              database= !Ref DBName
+#            )
+#            cursor=connection.cursor()
+#
+#            cursor.execute("""CREATE TABLE passengers(
+#              id SERIAL PRIMARY KEY,
+#              name text)""")
+#
+#  LambdaRDSGatewayInvoke:
+#    Type: 'AWS::Lambda::Permission'
+#    Properties:
+#      Action: lambda:InvokeFunction
+#      FunctionName: !Ref RDSTableLambda
+#      DependsOn:
+#        - MyRDS
+
   RestApi:
     Type: 'AWS::ApiGateway::RestApi'
     Properties:
@@ -43,69 +99,70 @@ Resources:
           - REGIONAL
       Name: twooder-api
 
-    GetUsers:
-      Type: 'AWS::ApiGateway::Method'
-      Properties:
-        RestApiId: !Ref RestApi
-        ResourceId: !GetAtt RestApi.RootResourceId
-        HttpMethod: GET
-        RequestParameters:
-          method.request.querystring.username: true
-        AuthorizationType: NONE
-        Integration:
-          IntegrationHttpMethod: GET
-          Type: AWS_PROXY
-          Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TwitterApiLambda.Arn}/invocations'
+  GetUsers:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !GetAtt RestApi.RootResourceId
+      HttpMethod: GET
+      RequestParameters:
+        method.request.querystring.username: true
+      AuthorizationType: NONE
+      Integration:
+        IntegrationHttpMethod: GET
+        Type: AWS_PROXY
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TwitterApiLambda.Arn}/invocations'
 
-    Deployment:
-      Type: 'AWS::ApiGateway::Deployment'
-      Properties:
-        RestApiId: !Ref RestApi
-        StageName: v1
-      DependsOn:
-        - GetUsers
+  Deployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    Properties:
+      RestApiId: !Ref RestApi
+      StageName: v1
+    DependsOn:
+      - GetUsers
 
-    TwitterApiLambda:
-      Type: 'AWS::Lambda::Function'
-      Properties:
-        Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
-        Runtime: python3.7
-        Handler: index.lambda_handler
-        Code:
-          ZipFile: |
-            import requests
-            
+  TwitterApiLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Runtime: python3.7
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import requests
 
-            def lambda_handler(event, context):
-                bearer_token = 'Bearer <BearerToken>'
-                username = event['queryStringParameters']['username']
 
-                res = requests.get("https://api.twitter.com/2/users/by?",
-                                 params={'usernames': username},
-                                 headers={'Authorization': bearer_token})
+          def lambda_handler(event, context):
+              bearer_token = 'Bearer !Ref BearToken'
+              username = event['queryStringParameters']['username']
 
-                user = res.json()['data'][0]
+              res = requests.get("https://api.twitter.com/2/users/by?",
+                               params={'usernames': username},
+                               headers={'Authorization': bearer_token})
 
-                if user is None:
-                    return {'statusCode': 400, 'body': None}
+              user = res.json()['data'][0]
 
-                user_id = user['id']
+              if user is None:
+                  return {'statusCode': 400, 'body': None}
 
-                if user_id is None:
-                    return {'statusCode': 400, 'body': None}
+              user_id = user['id']
 
-                url = "https://api.twitter.com/2/users/" + user_id + "/tweets"
-                res = requests.get(url, headers={'Authorization': bearer_token})
-                return { 'statusCode': 200, 'body': res.json() }
+              if user_id is None:
+                  return {'statusCode': 400, 'body': None}
 
-    LambdaApiGatewayInvoke:
-      Type: 'AWS::Lambda::Permission'
-      Properties:
-        Action: lambda:InvokeFunction
-        FunctionName: !Ref TwitterApiLambda
-        Principal: apigateway.amazonaws.com
+              url = "https://api.twitter.com/2/users/" + user_id + "/tweets"
+              res = requests.get(url, headers={'Authorization': bearer_token})
+              return { 'statusCode': 200, 'body': res.json() }
+
+  LambdaApiGatewayInvoke:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref TwitterApiLambda
+      Principal: apigateway.amazonaws.com
 
 Outputs:
   WebsiteURL:
     Value: !GetAtt MyBucket.WebsiteURL
     Description: URL for website hosted on S3
+
