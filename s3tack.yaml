@@ -8,16 +8,10 @@ Parameters:
   BucketName:
     Description: Unique name for your bucket. This will be in the S3 url to your React app.
     Type: String
-  MasterUser:
-    Description: master username for rds (Must be >8 characters)
+  TableName:
+    Description: Database Table Name
     Type: String
-  MasterPassword:
-    Description: master password for rds (Must be >8 characters)
-    Type: String
-  DBName:
-    Description: Database Name
-    Type: String
-  BearToken:
+  BearerToken:
     Description: Bear Token
     Type: String
 
@@ -46,50 +40,6 @@ Resources:
             Principal: '*' # wildcard, allow all requests
             Action: 's3:GetObject'
             Resource: !Join ['', ['arn:aws:s3:::', !Ref MyBucket, /*]]
-
-  # Creates an RDS DB
-  MyRDS:
-    Type: AWS::RDS::DBInstance
-    Properties:
-      DBName: !Ref DBName
-      Engine: postgres
-      AllocatedStorage: '5'
-      DBInstanceClass: db.m5.large
-      MasterUsername: !Ref MasterUser
-      MasterUserPassword: !Ref MasterPassword
-
-#  RDSTableLambda:
-#    Type: 'AWS::Lambda::Function'
-#    Properties:
-#      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
-#      Runtime: python3.9
-#      Handler: index.handler
-#      FunctionName: 'RDS_table'
-#      Code:
-#        ZipFile: |
-#          import psycopg2
-#
-#          def lambda_handler(event, context):
-#            connection = psycopg2.connect(
-#              host = '${Rds.Endpoint.Address}',
-#              port = 5432,
-#              user = !Ref MasterUser,
-#              password = !Ref MasterPassword,
-#              database= !Ref DBName
-#            )
-#            cursor=connection.cursor()
-#
-#            cursor.execute("""CREATE TABLE passengers(
-#              id SERIAL PRIMARY KEY,
-#              name text)""")
-#
-#  LambdaRDSGatewayInvoke:
-#    Type: 'AWS::Lambda::Permission'
-#    Properties:
-#      Action: lambda:InvokeFunction
-#      FunctionName: !Ref RDSTableLambda
-#      DependsOn:
-#        - MyRDS
 
   RestApi:
     Type: 'AWS::ApiGateway::RestApi'
@@ -127,32 +77,62 @@ Resources:
       Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
       Runtime: python3.7
       Handler: index.lambda_handler
+      Environment:
+        Variables:
+          tableName: !Ref TableName
+          BearerToken: !Ref BearerToken
       Code:
         ZipFile: |
           import requests
+          import boto3
+          import os
 
 
           def lambda_handler(event, context):
-              bearer_token = 'Bearer !Ref BearToken'
-              username = event['queryStringParameters']['username']
+            table_name = os.environ['tableName']
+            client = boto3.client('dynamodb')
+            result = client.list_tables()
+            if 'TableNames' not in result or len(result['TableNames']) == 0 or table_name in result['TableNames']:
+              response = client.create_table(
+                AttributeDefinitions=[
+                  {
+                    'AttributeName': 'Username',
+                     'AttributeType': 'S'
+                  }
+                ],
+                TableName='UserComprehendResults',
+                  KeySchema=[
+                    {
+                      'AttributeName': 'Username',
+                      'KeyType': 'HASH'
+                    }
+                  ],
+                ProvisionedThroughput={
+                  'ReadCapacityUnits': 5,
+                  'WriteCapacityUnits': 5
+                }
+              )
 
-              res = requests.get("https://api.twitter.com/2/users/by?",
+            bearer_token = 'Bearer ' + os.environ['bearerToken']
+            username = event['queryStringParameters']['username']
+
+            res = requests.get("https://api.twitter.com/2/users/by?",
                                params={'usernames': username},
                                headers={'Authorization': bearer_token})
 
-              user = res.json()['data'][0]
+            user = res.json()['data'][0]
 
-              if user is None:
-                  return {'statusCode': 400, 'body': None}
+            if user is None:
+              return {'statusCode': 400, 'body': None}
 
-              user_id = user['id']
+            user_id = user['id']
 
-              if user_id is None:
-                  return {'statusCode': 400, 'body': None}
+            if user_id is None:
+              return {'statusCode': 400, 'body': None}
 
-              url = "https://api.twitter.com/2/users/" + user_id + "/tweets"
-              res = requests.get(url, headers={'Authorization': bearer_token})
-              return { 'statusCode': 200, 'body': res.json() }
+            url = "https://api.twitter.com/2/users/" + user_id + "/tweets"
+            res = requests.get(url, headers={'Authorization': bearer_token})
+            return { 'statusCode': 200, 'body': res.json() }
 
   LambdaApiGatewayInvoke:
     Type: 'AWS::Lambda::Permission'
