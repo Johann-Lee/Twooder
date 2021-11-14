@@ -54,12 +54,12 @@ Resources:
     Properties:
       RestApiId: !Ref RestApi
       ResourceId: !GetAtt RestApi.RootResourceId
-      HttpMethod: GET
+      HttpMethod: POST
       RequestParameters:
         method.request.querystring.username: true
       AuthorizationType: NONE
       Integration:
-        IntegrationHttpMethod: GET
+        IntegrationHttpMethod: POST
         Type: AWS_PROXY
         Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TwitterApiLambda.Arn}/invocations'
 
@@ -77,43 +77,45 @@ Resources:
       Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
       Runtime: python3.7
       Handler: index.lambda_handler
+      Timeout: 15
       Environment:
         Variables:
-          tableName: !Ref TableName
+          TableName: !Ref TableName
           BearerToken: !Ref BearerToken
       Code:
         ZipFile: |
           import requests
           import boto3
           import os
+          import json
 
 
           def lambda_handler(event, context):
-            table_name = os.environ['tableName']
-            client = boto3.client('dynamodb')
-            result = client.list_tables()
+            table_name = os.environ['TableName']
+            db = boto3.client('dynamodb')
+            result = db.list_tables()
             if 'TableNames' not in result or len(result['TableNames']) == 0 or table_name in result['TableNames']:
-              response = client.create_table(
+              response = db.create_table(
                 AttributeDefinitions=[
                   {
                     'AttributeName': 'Username',
-                     'AttributeType': 'S'
+                    'AttributeType': 'S'
                   }
                 ],
-                TableName='UserComprehendResults',
-                  KeySchema=[
-                    {
-                      'AttributeName': 'Username',
-                      'KeyType': 'HASH'
-                    }
-                  ],
+                TableName=table_name,
+                KeySchema=[
+                  {
+                    'AttributeName': 'Username',
+                    'KeyType': 'HASH'
+                  }
+                ],
                 ProvisionedThroughput={
                   'ReadCapacityUnits': 5,
                   'WriteCapacityUnits': 5
                 }
               )
 
-            bearer_token = 'Bearer ' + os.environ['bearerToken']
+            bearer_token = 'Bearer ' + os.environ['BearerToken']
             username = event['queryStringParameters']['username']
 
             res = requests.get("https://api.twitter.com/2/users/by?",
@@ -130,9 +132,36 @@ Resources:
             if user_id is None:
               return {'statusCode': 400, 'body': None}
 
-            url = "https://api.twitter.com/2/users/" + user_id + "/tweets"
+            url = "https://api.twitter.com/2/users/" + user_id + "/tweets?max_results=30"
             res = requests.get(url, headers={'Authorization': bearer_token})
-            return { 'statusCode': 200, 'body': res.json() }
+
+            print(res)
+            tweets = res.json()['data']
+
+            comprehend = boto3.client('comprehend')
+
+            total_positive = 0
+            total_negative = 0
+            total_neutral = 0
+
+            for tweet in tweets:
+              comprehend_result = comprehend.detect_sentiment(Text=tweet['text'], LanguageCode='en')
+              total_positive = total_positive + comprehend_result['SentimentScore']['Positive']
+              total_negative = total_negative + comprehend_result['SentimentScore']['Negative']
+              total_neutral = total_neutral + comprehend_result['SentimentScore']['Neutral']
+
+            positive = total_positive / len(tweets)
+            negative = total_negative / len(tweets)
+            netural = total_neutral / len(tweets)
+
+            return {
+              'statusCode': 200,
+              'body': json.dumps({
+                'positive': positive,
+                'negative': negative,
+                'neutral': netural
+              })
+            }
 
   LambdaApiGatewayInvoke:
     Type: 'AWS::Lambda::Permission'
