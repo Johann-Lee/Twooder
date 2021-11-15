@@ -1,48 +1,20 @@
-# Create an S3 Bucket that hosts a React app
-# Use AWS CLI to execute the file like the below snippet
-# aws cloudformation deploy --template-file ./cloudformation_basic.yml --stack-name basic --parameter-overrides BucketName=<BUCKET_NAME>
-
-AWSTemplateFormatVersion: 2010-09-09
-
 Parameters: 
-  BucketName:
-    Description: Unique name for your bucket. This will be in the S3 url to your React app.
-    Type: String
   TableName:
     Description: Database Table Name
     Type: String
+    Default: TwooderTable
   BearerToken:
-    Description: Bear Token
+    Description: Twitter API bearer token
     Type: String
+    NoEcho: true
+  GithubToken:
+    Description: GitHub personal access token
+    Type: String
+    NoEcho: true
 
 Resources:
-  # Create an S3 Bucket that serves a static website (i.e. React app)
-  MyBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Ref BucketName
-      AccessControl: PublicRead 
-      WebsiteConfiguration: # this makes the S3 Bucket a static website/app
-        IndexDocument: index.html # default object served when visiting S3 domain
-        ErrorDocument: index.html # just send to app, let React handle errors and routing
-
-  # Add a Bucket Policy that lets public visitors access the web app
-  MyBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref MyBucket # attach to bucket being created
-      PolicyDocument:
-        Id: MyPolicy
-        Version: 2012-10-17
-        Statement: # lets the public access/view the contents of your Bucket, i.e. web app
-          - Sid: PublicReadForGetBucketObjects
-            Effect: Allow
-            Principal: '*' # wildcard, allow all requests
-            Action: 's3:GetObject'
-            Resource: !Join ['', ['arn:aws:s3:::', !Ref MyBucket, /*]]
-
   RestApi:
-    Type: 'AWS::ApiGateway::RestApi'
+    Type: AWS::ApiGateway::RestApi
     Properties:
       EndpointConfiguration:
         Types:
@@ -50,7 +22,7 @@ Resources:
       Name: twooder-api
 
   GetUsers:
-    Type: 'AWS::ApiGateway::Method'
+    Type: AWS::ApiGateway::Method
     Properties:
       RestApiId: !Ref RestApi
       ResourceId: !GetAtt RestApi.RootResourceId
@@ -64,7 +36,7 @@ Resources:
         Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TwitterApiLambda.Arn}/invocations'
 
   Deployment:
-    Type: 'AWS::ApiGateway::Deployment'
+    Type: AWS::ApiGateway::Deployment
     Properties:
       RestApiId: !Ref RestApi
       StageName: v1
@@ -72,7 +44,7 @@ Resources:
       - GetUsers
 
   TwitterApiLambda:
-    Type: 'AWS::Lambda::Function'
+    Type: AWS::Lambda::Function
     Properties:
       Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
       Runtime: python3.7
@@ -164,14 +136,44 @@ Resources:
             }
 
   LambdaApiGatewayInvoke:
-    Type: 'AWS::Lambda::Permission'
+    Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
       FunctionName: !Ref TwitterApiLambda
       Principal: apigateway.amazonaws.com
-
-Outputs:
-  WebsiteURL:
-    Value: !GetAtt MyBucket.WebsiteURL
-    Description: URL for website hosted on S3
-
+      
+  AmplifyApp:
+    Type: AWS::Amplify::App
+    Properties:
+      Name: Twooder
+      Repository: https://github.com/swen-514-team-7/twooder-web-app
+      OauthToken: !Ref GithubToken
+      EnvironmentVariables:
+        - Name: apiUrl
+          Value: !Sub "https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/v1/"
+      BuildSpec: |-
+        version: 0.1
+        frontend:
+          phases:
+            preBuild:
+              commands:
+                - npm install
+            build:
+              commands:
+                - npm run build
+          artifacts:
+            baseDirectory: build
+            files:
+              - '**/*'
+      
+  AmplifyBranch:
+    Type: AWS::Amplify::Branch
+    Properties:
+      BranchName: master
+      AppId: !GetAtt AmplifyApp.AppId
+      EnableAutoBuild: true
+      Tags:
+        - Key: Name
+          Value: twooder-master
+        - Key: Branch
+          Value: master
